@@ -1,6 +1,12 @@
-use std::{env::args, ffi::OsStr, path::Path};
+use std::{
+    env::args,
+    ffi::OsStr,
+    path::Path,
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
+};
 #[macro_use]
 extern crate structure;
+use rayon::prelude::*;
 fn get_crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFFFFFFu32;
     let table = generate_crc32_table();
@@ -9,7 +15,6 @@ fn get_crc32(data: &[u8]) -> u32 {
         let index = ((crc ^ u32::from(*byte)) & 0xFF) as usize;
         crc = (crc >> 8) ^ table[index];
     }
-
     !crc
 }
 fn generate_crc32_table() -> [u32; 256] {
@@ -34,8 +39,17 @@ fn generate_crc32_table() -> [u32; 256] {
 fn crc32_exp(res: &mut String, pic: &mut Vec<u8>, cur_width: u32, real_crc32: u32, path: &Path) {
     let s = structure!("I");
     *res += &format!("STARTING CRC32!\n");
-    for i in [cur_width].into_iter().chain(0..4096) {
-        for j in 0..4096 {
+    let found = AtomicBool::new(false);
+    let real_width = AtomicU32::new(0);
+    let real_height = AtomicU32::new(0);
+    for i in [cur_width].into_iter().chain(0..10000) {
+        if found.load(Ordering::Relaxed) {
+            break;
+        }
+        (0u32..10000).into_par_iter().for_each(|j| {
+            if found.load(Ordering::Relaxed) {
+                return;
+            }
             let mut data = pic[12..16].to_vec();
             data.append(&mut s.pack(i).unwrap());
             data.append(&mut s.pack(j).unwrap());
@@ -43,17 +57,28 @@ fn crc32_exp(res: &mut String, pic: &mut Vec<u8>, cur_width: u32, real_crc32: u3
 
             let current_crc32: u32 = get_crc32(&data);
             if current_crc32 == real_crc32 {
-                *res += &format!("CRC32KEY MATCHED!\n");
-                *res += &format!("Real Width: {{{}}} Real Height: {{{}}}\n", i, j);
-                pic.splice(12..29, data);
-                let final_file_name =
-                    "fix_".to_string() + path.file_name().unwrap().to_str().unwrap();
-                let final_path = path.with_file_name(OsStr::new(&final_file_name));
-                let _ = std::fs::write(final_path.clone(), pic);
-                *res += &format!("Fixed File Save to {:?}\n", final_path);
-                return;
+                real_width.store(i, Ordering::Relaxed);
+                real_height.store(j, Ordering::Relaxed);
+                found.store(true, Ordering::Relaxed);
             }
-        }
+        });
+    }
+    if found.load(Ordering::Relaxed) {
+        let i = real_width.load(Ordering::Relaxed);
+        let j = real_height.load(Ordering::Relaxed);
+        let mut data = pic[12..16].to_vec();
+        data.append(&mut s.pack(i).unwrap());
+        data.append(&mut s.pack(j).unwrap());
+        data.extend(&pic[24..29]);
+        *res += &format!("CRC32KEY MATCHED!\n");
+        *res += &format!("Real Width: {{{}}} Real Height: {{{}}}\n", i, j);
+        pic.splice(12..29, data);
+        let final_file_name = "fix_".to_string() + path.file_name().unwrap().to_str().unwrap();
+        let final_path = path.with_file_name(OsStr::new(&final_file_name));
+        let _ = std::fs::write(final_path.clone(), pic);
+        *res += &format!("Fixed File Save to {:?}\n", final_path);
+    } else {
+        *res += &format!("Not found real width and height\n");
     }
 }
 fn png_width_height(p: &str) -> String {

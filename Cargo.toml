@@ -6,7 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+rayon = "1.8.0"
 structure = "0.1.2"
 
 [[bin]]
 name = "png_width_height_crc32"
+
+[[bin]]
+name = "detect_unvisible_zip"
